@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skate Deck Editor</title>
+
+<style>
+:root{
+  --panel-bg:#1b1b1b;
+  --btn:#333;
+}
+
+body{
+  margin:0;
+  background:#111;
+  color:#fff;
+  font-family:system-ui, Arial;
+  height:100vh;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+/* ===== TOOLBAR ===== */
+#panel{
+  background:var(--panel-bg);
+  display:flex;
+  gap:8px;
+  padding:8px;
+  overflow-x:auto;
+}
+
+button,input{
+  background:var(--btn);
+  color:#fff;
+  border:none;
+  padding:8px;
+  border-radius:6px;
+  min-width:44px;
+}
+
+input[type="range"]{ width:80px; }
+
+/* ===== CANVAS AREA ===== */
+#canvasWrap{
+  flex:1;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+
+#stage{
+  position:relative;
+  width:100%;
+  height:100%;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+
+canvas{
+  max-height:100%;
+  max-width:100%;
+  aspect-ratio:420 / 1100;
+  touch-action:none;
+}
+
+@media(min-width:900px){
+  body{ flex-direction:row; }
+  #panel{
+    width:240px;
+    flex-direction:column;
+    overflow:auto;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<div id="panel">
+  <button onclick="tool='brush'">✏️</button>
+  <button onclick="tool='eraser'">🧽</button>
+  <button onclick="tool='select'">🖐</button>
+
+  <input type="color" id="color" value="#ffffff">
+  <input type="range" id="size" min="1" max="40" value="8">
+
+  <input type="file" id="imgInput" accept="image/*">
+  <button onclick="addLayer()">➕</button>
+  <button onclick="exportPNG()">⬇️</button>
+</div>
+
+<div id="canvasWrap">
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+  </div>
+</div>
+
+<script>
+/* ===== CONSTANTES ===== */
+const DESIGN_W = 420;
+const DESIGN_H = 1100;
+
+/* ===== CANVAS ===== */
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d",{willReadFrequently:true});
+
+/* ===== UI ===== */
+const color = document.getElementById("color");
+const size  = document.getElementById("size");
+const imgInput = document.getElementById("imgInput");
+
+/* ===== STATE ===== */
+let tool="brush", drawing=false, dragging=false, resizing=false;
+let lastX=0,lastY=0,activeLayer=-1;
+const layers=[];
+
+/* ===== MULTITOUCH ===== */
+const pointers = new Map();
+let pinchStartDist = 0;
+let pinchStartSize = { w:0, h:0 };
+
+/* ===== RESIZE ===== */
+let scale = 1;
+function resizeCanvas(){
+  const rect = canvas.parentElement.getBoundingClientRect();
+  scale = Math.min(rect.width/DESIGN_W, rect.height/DESIGN_H);
+
+  canvas.width = DESIGN_W;
+  canvas.height = DESIGN_H;
+  canvas.style.width = DESIGN_W*scale+"px";
+  canvas.style.height = DESIGN_H*scale+"px";
+
+  render();
+}
+window.addEventListener("resize",resizeCanvas);
+
+/* ===== SKATE MASK (FORMA REAL) ===== */
+function skateMask(c){
+  c.beginPath();
+
+  // Nose
+  c.moveTo(210,20);
+  c.quadraticCurveTo(360,80,360,160);
+
+  // Lado derecho
+  c.lineTo(360,940);
+
+  // Tail
+  c.quadraticCurveTo(360,1020,210,1080);
+  c.quadraticCurveTo(60,1020,60,940);
+
+  // Lado izquierdo
+  c.lineTo(60,160);
+
+  // Cierre nose
+  c.quadraticCurveTo(60,80,210,20);
+
+  c.closePath();
+  c.clip();
+}
+
+/* ===== LAYERS ===== */
+function addLayer(img=null){
+  layers.push({
+    img,
+    x:60,y:120,
+    w:img?300:0,
+    h:img?300:0
+  });
+  activeLayer=layers.length-1;
+  render();
+}
+
+/* ===== RENDER ===== */
+function render(){
+  ctx.clearRect(0,0,DESIGN_W,DESIGN_H);
+  ctx.save();
+  skateMask(ctx);
+
+  layers.forEach((l,i)=>{
+    if(!l.img) return;
+    ctx.drawImage(l.img,l.x,l.y,l.w,l.h);
+
+    if(i===activeLayer){
+      ctx.strokeStyle="#0ff";
+      ctx.strokeRect(l.x,l.y,l.w,l.h);
+      ctx.fillRect(l.x+l.w-12,l.y+l.h-12,12,12);
+    }
+  });
+
+  ctx.restore();
+}
+
+/* ===== POINTER UTILS ===== */
+function pos(e){
+  const r=canvas.getBoundingClientRect();
+  return{
+    x:(e.clientX-r.left)/scale,
+    y:(e.clientY-r.top)/scale
+  };
+}
+
+function dist(a,b){
+  return Math.hypot(a.x-b.x,a.y-b.y);
+}
+
+/* ===== EVENTS ===== */
+canvas.addEventListener("pointerdown",e=>{
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId,pos(e));
+
+  if(pointers.size===2 && activeLayer!==-1){
+    const [a,b]=[...pointers.values()];
+    pinchStartDist = dist(a,b);
+    const l=layers[activeLayer];
+    pinchStartSize={ w:l.w, h:l.h };
+  }
+
+  const p=pos(e);
+  lastX=p.x; lastY=p.y;
+
+  if(tool==="select"){
+    activeLayer=[...layers].reverse().findIndex(l=>
+      p.x>l.x&&p.x<l.x+l.w&&p.y>l.y&&p.y<l.y+l.h
+    );
+    if(activeLayer!==-1){
+      activeLayer=layers.length-1-activeLayer;
+      const l=layers[activeLayer];
+      resizing=p.x>l.x+l.w-20&&p.y>l.y+l.h-20;
+      dragging=!resizing;
+    }
+  }else{
+    drawing=true;
+  }
+});
+
+canvas.addEventListener("pointermove",e=>{
+  if(!pointers.has(e.pointerId)) return;
+  const p=pos(e);
+  pointers.set(e.pointerId,p);
+
+  /* PINCH */
+  if(pointers.size===2 && activeLayer!==-1){
+    const [a,b]=[...pointers.values()];
+    const d=dist(a,b);
+    const scale=d/pinchStartDist;
+    const l=layers[activeLayer];
+    l.w=pinchStartSize.w*scale;
+    l.h=pinchStartSize.h*scale;
+    render();
+    return;
+  }
+
+  if(drawing){
+    ctx.save();
+    skateMask(ctx);
+    ctx.globalCompositeOperation=tool==="eraser"?"destination-out":"source-over";
+    ctx.strokeStyle=color.value;
+    ctx.lineWidth=size.value;
+    ctx.lineCap="round";
+    ctx.beginPath();
+    ctx.moveTo(lastX,lastY);
+    ctx.lineTo(p.x,p.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if(dragging&&activeLayer!==-1){
+    const l=layers[activeLayer];
+    l.x+=p.x-lastX;
+    l.y+=p.y-lastY;
+    render();
+  }
+
+  if(resizing&&activeLayer!==-1){
+    const l=layers[activeLayer];
+    l.w+=p.x-lastX;
+    l.h+=p.y-lastY;
+    render();
+  }
+
+  lastX=p.x; lastY=p.y;
+});
+
+canvas.addEventListener("pointerup",e=>{
+  pointers.delete(e.pointerId);
+  drawing=dragging=resizing=false;
+});
+
+/* ===== IMAGE ===== */
+imgInput.onchange=e=>{
+  const img=new Image();
+  img.onload=()=>addLayer(img);
+  img.src=URL.createObjectURL(e.target.files[0]);
+};
+
+/* ===== EXPORT ===== */
+function exportPNG(){
+  const out=document.createElement("canvas");
+  out.width=DESIGN_W;
+  out.height=DESIGN_H;
+  const o=out.getContext("2d");
+
+  o.save();
+  skateMask(o);
+  layers.forEach(l=>l.img&&o.drawImage(l.img,l.x,l.y,l.w,l.h));
+  o.restore();
+
+  out.toBlob(b=>{
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(b);
+    a.download="skate-promodel.png";
+    a.click();
+  });
+}
+
+/* ===== INIT ===== */
+resizeCanvas();
+</script>
+
+</body>
+</html>
