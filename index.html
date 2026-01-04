@@ -6,89 +6,42 @@
 <title>Skate Deck Editor</title>
 
 <style>
-:root{
-  --panel-bg:#1b1b1b;
-  --btn:#333;
-}
-
+:root{ --panel-bg:#1b1b1b; --btn:#333; }
 body{
-  margin:0;
-  background:#111;
-  color:#fff;
+  margin:0; background:#111; color:#fff;
   font-family:system-ui, Arial;
-  height:100vh;
-  display:flex;
-  flex-direction:column;
-  overflow:hidden;
+  height:100vh; display:flex; flex-direction:column; overflow:hidden;
 }
-
-/* ===== TOOLBAR ===== */
 #panel{
   background:var(--panel-bg);
-  display:flex;
-  gap:8px;
-  padding:8px;
-  overflow-x:auto;
+  display:flex; gap:8px; padding:8px; overflow-x:auto;
 }
-
 button,input{
-  background:var(--btn);
-  color:#fff;
-  border:none;
-  padding:8px;
-  border-radius:6px;
-  min-width:44px;
+  background:var(--btn); color:#fff; border:none;
+  padding:8px; border-radius:6px; min-width:44px;
 }
-
-input[type="range"]{ width:80px; }
-
-/* ===== CANVAS AREA ===== */
-#canvasWrap{
-  flex:1;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-}
-
-#stage{
-  position:relative;
-  width:100%;
-  height:100%;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-}
-
-canvas{
-  max-height:100%;
-  max-width:100%;
-  aspect-ratio:420 / 1100;
-  touch-action:none;
-}
-
-@media(min-width:900px){
-  body{ flex-direction:row; }
-  #panel{
-    width:240px;
-    flex-direction:column;
-    overflow:auto;
-  }
-}
+#canvasWrap{ flex:1; display:flex; justify-content:center; align-items:center; }
+#stage{ width:100%; max-width:380px; }
+canvas{ width:80%; aspect-ratio:420/900; touch-action:none; }
 </style>
 </head>
 
 <body>
 
 <div id="panel">
-  <button onclick="tool='brush'">✏️</button>
-  <button onclick="tool='eraser'">🧽</button>
   <button onclick="tool='select'">🖐</button>
+  <button onclick="tool='brush'">✏️</button>
+  <button onclick="tool='eraseImg'">🧽 Img</button>
 
-  <input type="color" id="color" value="#ffffff">
-  <input type="range" id="size" min="1" max="40" value="8">
+  <button onclick="stretchMode='free'">🔍</button>
+  <button onclick="stretchMode='x'">↔️</button>
+  <button onclick="stretchMode='y'">↕️</button>
+  <button onclick="resetScale()">🔄</button>
 
+  <input type="color" id="brushColor" value="#ffffff">
+  <input type="color" id="bgColor" value="#c9a26a">
   <input type="file" id="imgInput" accept="image/*">
-  <button onclick="addLayer()">➕</button>
+  <button onclick="deleteLayer()">🗑</button>
   <button onclick="exportPNG()">⬇️</button>
 </div>
 
@@ -99,76 +52,78 @@ canvas{
 </div>
 
 <script>
-/* ===== CONSTANTES ===== */
-const DESIGN_W = 420;
-const DESIGN_H = 1100;
+const DESIGN_W=420, DESIGN_H=900;
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
 
-/* ===== CANVAS ===== */
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d",{willReadFrequently:true});
+const imgInput=document.getElementById("imgInput");
+const brushColorInput=document.getElementById("brushColor");
+const bgColorInput=document.getElementById("bgColor");
 
-/* ===== UI ===== */
-const color = document.getElementById("color");
-const size  = document.getElementById("size");
-const imgInput = document.getElementById("imgInput");
+let bgColor=bgColorInput.value;
+let tool="select";
+let stretchMode="free";
 
-/* ===== STATE ===== */
-let tool="brush", drawing=false, dragging=false, resizing=false;
-let lastX=0,lastY=0,activeLayer=-1;
+let activeLayer=-1, dragging=false;
+let lastX=0,lastY=0;
+let scale=1;
+
 const layers=[];
 
+/* ===== DRAW LAYER ===== */
+const drawCanvas=document.createElement("canvas");
+drawCanvas.width=DESIGN_W;
+drawCanvas.height=DESIGN_H;
+const drawCtx=drawCanvas.getContext("2d");
+drawCtx.lineCap="round";
+drawCtx.lineJoin="round";
+drawCtx.lineWidth=6;
+
 /* ===== MULTITOUCH ===== */
-const pointers = new Map();
-let pinchStartDist = 0;
-let pinchStartSize = { w:0, h:0 };
+let pointers=new Map();
+let startDist=0,startAngle=0;
+let startScaleX=1,startScaleY=1,startRotation=0;
 
 /* ===== RESIZE ===== */
-let scale = 1;
 function resizeCanvas(){
-  const rect = canvas.parentElement.getBoundingClientRect();
-  scale = Math.min(rect.width/DESIGN_W, rect.height/DESIGN_H);
-
-  canvas.width = DESIGN_W;
-  canvas.height = DESIGN_H;
-  canvas.style.width = DESIGN_W*scale+"px";
-  canvas.style.height = DESIGN_H*scale+"px";
-
+  const r=canvas.parentElement.getBoundingClientRect();
+  scale=Math.min(r.width/DESIGN_W,r.height/DESIGN_H);
+  canvas.width=DESIGN_W;
+  canvas.height=DESIGN_H;
+  canvas.style.width=DESIGN_W*scale+"px";
+  canvas.style.height=DESIGN_H*scale+"px";
   render();
 }
 window.addEventListener("resize",resizeCanvas);
 
-/* ===== SKATE MASK (FORMA REAL) ===== */
-function skateMask(c){
+/* ===== SKATE ===== */
+function skatePath(c){
+  const cx=210,lx=80,rx=350,ny=30,ty=870,d=300,st=200,sb=600;
   c.beginPath();
-
-  // Nose
-  c.moveTo(210,20);
-  c.quadraticCurveTo(360,80,360,160);
-
-  // Lado derecho
-  c.lineTo(360,940);
-
-  // Tail
-  c.quadraticCurveTo(360,1020,210,1080);
-  c.quadraticCurveTo(60,1020,60,940);
-
-  // Lado izquierdo
-  c.lineTo(60,160);
-
-  // Cierre nose
-  c.quadraticCurveTo(60,80,210,20);
-
+  c.moveTo(cx,ny);
+  c.bezierCurveTo(rx,ny+20,rx+20,ny+d,rx,st);
+  c.lineTo(rx,sb);
+  c.bezierCurveTo(rx+20,ty-d,rx,ty-20,cx,ty);
+  c.bezierCurveTo(lx,ty-20,lx-20,ty-d,lx,sb);
+  c.lineTo(lx,st);
+  c.bezierCurveTo(lx-20,ny+d,lx,ny+20,cx,ny);
   c.closePath();
-  c.clip();
 }
+function skateMask(c){ skatePath(c); c.clip(); }
 
 /* ===== LAYERS ===== */
-function addLayer(img=null){
+function addLayer(img){
+  const c=document.createElement("canvas");
+  c.width=img.width;
+  c.height=img.height;
+  c.getContext("2d").drawImage(img,0,0);
+
   layers.push({
-    img,
-    x:60,y:120,
-    w:img?300:0,
-    h:img?300:0
+    canvas:c,
+    x:210,y:450,
+    w:img.width,h:img.height,
+    scaleX:1,scaleY:1,
+    rotation:0
   });
   activeLayer=layers.length-1;
   render();
@@ -177,149 +132,147 @@ function addLayer(img=null){
 /* ===== RENDER ===== */
 function render(){
   ctx.clearRect(0,0,DESIGN_W,DESIGN_H);
-  ctx.save();
-  skateMask(ctx);
+  ctx.save(); skatePath(ctx); ctx.fillStyle=bgColor; ctx.fill(); ctx.restore();
+
+  ctx.save(); skateMask(ctx);
+  ctx.drawImage(drawCanvas,0,0);
 
   layers.forEach((l,i)=>{
-    if(!l.img) return;
-    ctx.drawImage(l.img,l.x,l.y,l.w,l.h);
-
-    if(i===activeLayer){
+    ctx.save();
+    ctx.translate(l.x,l.y);
+    ctx.rotate(l.rotation);
+    ctx.scale(l.scaleX,l.scaleY);
+    ctx.drawImage(l.canvas,-l.w/2,-l.h/2,l.w,l.h);
+    if(i===activeLayer && tool==="select"){
       ctx.strokeStyle="#0ff";
-      ctx.strokeRect(l.x,l.y,l.w,l.h);
-      ctx.fillRect(l.x+l.w-12,l.y+l.h-12,12,12);
+      ctx.strokeRect(-l.w/2,-l.h/2,l.w,l.h);
     }
+    ctx.restore();
   });
-
   ctx.restore();
 }
 
-/* ===== POINTER UTILS ===== */
+/* ===== UTILS ===== */
 function pos(e){
   const r=canvas.getBoundingClientRect();
-  return{
-    x:(e.clientX-r.left)/scale,
-    y:(e.clientY-r.top)/scale
-  };
+  return{ x:(e.clientX-r.left)/scale, y:(e.clientY-r.top)/scale };
 }
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const angle=(a,b)=>Math.atan2(b.y-a.y,b.x-a.x);
 
-function dist(a,b){
-  return Math.hypot(a.x-b.x,a.y-b.y);
-}
-
-/* ===== EVENTS ===== */
+/* ===== POINTER ===== */
 canvas.addEventListener("pointerdown",e=>{
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId,pos(e));
+  const p=pos(e); lastX=p.x; lastY=p.y;
 
-  if(pointers.size===2 && activeLayer!==-1){
-    const [a,b]=[...pointers.values()];
-    pinchStartDist = dist(a,b);
-    const l=layers[activeLayer];
-    pinchStartSize={ w:l.w, h:l.h };
+  if(tool==="brush"){
+    drawCtx.save(); skateMask(drawCtx);
+    drawCtx.strokeStyle=brushColorInput.value;
+    drawCtx.beginPath(); drawCtx.moveTo(p.x,p.y); return;
   }
 
-  const p=pos(e);
-  lastX=p.x; lastY=p.y;
+  activeLayer=[...layers].reverse().findIndex(l=>{
+    const dx=p.x-l.x,dy=p.y-l.y;
+    return Math.hypot(dx,dy)<200;
+  });
+  if(activeLayer!==-1){
+    activeLayer=layers.length-1-activeLayer;
+    dragging=true;
+  }
 
-  if(tool==="select"){
-    activeLayer=[...layers].reverse().findIndex(l=>
-      p.x>l.x&&p.x<l.x+l.w&&p.y>l.y&&p.y<l.y+l.h
-    );
-    if(activeLayer!==-1){
-      activeLayer=layers.length-1-activeLayer;
-      const l=layers[activeLayer];
-      resizing=p.x>l.x+l.w-20&&p.y>l.y+l.h-20;
-      dragging=!resizing;
-    }
-  }else{
-    drawing=true;
+  if(pointers.size===2 && activeLayer!==-1){
+    const pts=[...pointers.values()];
+    const l=layers[activeLayer];
+    startDist=dist(pts[0],pts[1]);
+    startAngle=angle(pts[0],pts[1]);
+    startScaleX=l.scaleX;
+    startScaleY=l.scaleY;
+    startRotation=l.rotation;
   }
 });
 
 canvas.addEventListener("pointermove",e=>{
   if(!pointers.has(e.pointerId)) return;
-  const p=pos(e);
-  pointers.set(e.pointerId,p);
+  const p=pos(e); pointers.set(e.pointerId,p);
 
-  /* PINCH */
+  if(tool==="brush"){
+    drawCtx.lineTo(p.x,p.y); drawCtx.stroke(); render(); return;
+  }
+
+  if(tool==="eraseImg" && activeLayer!==-1){
+    const l=layers[activeLayer];
+    const c=l.canvas.getContext("2d");
+    c.globalCompositeOperation="destination-out";
+    c.beginPath();
+    c.arc((p.x-l.x)/l.scaleX+l.w/2,(p.y-l.y)/l.scaleY+l.h/2,20,0,Math.PI*2);
+    c.fill();
+    c.globalCompositeOperation="source-over";
+    render(); return;
+  }
+
   if(pointers.size===2 && activeLayer!==-1){
-    const [a,b]=[...pointers.values()];
-    const d=dist(a,b);
-    const scale=d/pinchStartDist;
+    const pts=[...pointers.values()];
+    const f=dist(pts[0],pts[1])/startDist;
     const l=layers[activeLayer];
-    l.w=pinchStartSize.w*scale;
-    l.h=pinchStartSize.h*scale;
-    render();
-    return;
+    if(stretchMode==="free"){ l.scaleX=startScaleX*f; l.scaleY=startScaleY*f; }
+    if(stretchMode==="x"){ l.scaleX=startScaleX*f; }
+    if(stretchMode==="y"){ l.scaleY=startScaleY*f; }
+    l.rotation=startRotation+(angle(pts[0],pts[1])-startAngle);
+    render(); return;
   }
 
-  if(drawing){
-    ctx.save();
-    skateMask(ctx);
-    ctx.globalCompositeOperation=tool==="eraser"?"destination-out":"source-over";
-    ctx.strokeStyle=color.value;
-    ctx.lineWidth=size.value;
-    ctx.lineCap="round";
-    ctx.beginPath();
-    ctx.moveTo(lastX,lastY);
-    ctx.lineTo(p.x,p.y);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  if(dragging&&activeLayer!==-1){
+  if(dragging && activeLayer!==-1){
     const l=layers[activeLayer];
-    l.x+=p.x-lastX;
-    l.y+=p.y-lastY;
-    render();
+    l.x+=p.x-lastX; l.y+=p.y-lastY; render();
   }
-
-  if(resizing&&activeLayer!==-1){
-    const l=layers[activeLayer];
-    l.w+=p.x-lastX;
-    l.h+=p.y-lastY;
-    render();
-  }
-
   lastX=p.x; lastY=p.y;
 });
 
-canvas.addEventListener("pointerup",e=>{
-  pointers.delete(e.pointerId);
-  drawing=dragging=resizing=false;
-});
+canvas.addEventListener("pointerup",()=>{ pointers.clear(); dragging=false; drawCtx.restore?.(); });
 
-/* ===== IMAGE ===== */
+/* ===== CONTROLS ===== */
+bgColorInput.oninput=e=>{ bgColor=e.target.value; render(); };
 imgInput.onchange=e=>{
   const img=new Image();
   img.onload=()=>addLayer(img);
   img.src=URL.createObjectURL(e.target.files[0]);
 };
+function deleteLayer(){
+  if(activeLayer!==-1){ layers.splice(activeLayer,1); activeLayer=-1; render(); }
+}
+function resetScale(){
+  if(activeLayer!==-1){
+    layers[activeLayer].scaleX=1;
+    layers[activeLayer].scaleY=1;
+    render();
+  }
+}
 
 /* ===== EXPORT ===== */
 function exportPNG(){
   const out=document.createElement("canvas");
-  out.width=DESIGN_W;
-  out.height=DESIGN_H;
+  out.width=DESIGN_W; out.height=DESIGN_H;
   const o=out.getContext("2d");
-
-  o.save();
-  skateMask(o);
-  layers.forEach(l=>l.img&&o.drawImage(l.img,l.x,l.y,l.w,l.h));
-  o.restore();
-
+  skateMask(o); o.fillStyle=bgColor; o.fill();
+  o.drawImage(drawCanvas,0,0);
+  layers.forEach(l=>{
+    o.save();
+    o.translate(l.x,l.y);
+    o.rotate(l.rotation);
+    o.scale(l.scaleX,l.scaleY);
+    o.drawImage(l.canvas,-l.w/2,-l.h/2,l.w,l.h);
+    o.restore();
+  });
   out.toBlob(b=>{
     const a=document.createElement("a");
     a.href=URL.createObjectURL(b);
-    a.download="skate-promodel.png";
+    a.download="skate-deck.png";
     a.click();
   });
 }
 
-/* ===== INIT ===== */
 resizeCanvas();
 </script>
-
 </body>
 </html>
